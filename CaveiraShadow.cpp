@@ -26,7 +26,6 @@ DWORD ProcessID = memory->GetProcessID(L"RainbowSix.exe");
 HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, ProcessID);
 unsigned long long base = memory->BaseAddress(ProcessID);
 
-
 class R6 {
 public:
     class Functions {
@@ -34,12 +33,14 @@ public:
         uintptr_t GameManager();
         uintptr_t RoundManager();
         uintptr_t EntityList();
+        uintptr_t EntityCount();
+        uintptr_t EntityInfo(uintptr_t entity);
         bool GameState();
     };
 
     class Features {
     public:
-        void CaveiraESP(BYTE value);
+        void CaveiraESP(bool active1);
     };
 
     Functions* functions;
@@ -61,15 +62,29 @@ uintptr_t R6::Functions::RoundManager()
 
 uintptr_t R6::Functions::EntityList()
 {
-    uintptr_t encrypted = memory->Read<uintptr_t>(hProcess, GameManager() + Config::Offsets::EntityList::pChain);
-    encrypted = ((encrypted ^ Config::Decryption::EntityList::pDecryption1) + Config::Decryption::EntityList::pDecryption2) ^ Config::Decryption::EntityList::pDecryption3;
+    uint64_t entityList = memory->Read<uint64_t>(hProcess, base + Config::Offsets::pGameManager);
+    entityList = memory->Read<uint64_t>(hProcess, entityList + 0xE0);
 
-    return encrypted;
+    entityList ^= 0x53;
+    entityList += 0xEEBD43B91E3D5D54;
+    entityList ^= 0x1FEC13843E78A654;
+
+    return entityList;
+}
+
+uintptr_t R6::Functions::EntityInfo(uintptr_t entity)
+{
+    uint64_t info = memory->Read<uint64_t>(hProcess, entity + 0x50);
+    info = _rotl64(info, 1);
+    info -= 0x53;
+    info = info ^ 0x84B4E3BD4F9014AF;
+
+    return info;
 }
 
 bool R6::Functions::GameState()
 {
-    BYTE phase = memory->Read<BYTE>(hProcess, RoundManager() + Config::Offsets::EntityList::State::pChain_1);
+    BYTE phase = memory->Read<BYTE>(hProcess, RoundManager() + 0x300);
 
     if (phase == 2 || phase == 3)
     {
@@ -81,30 +96,56 @@ bool R6::Functions::GameState()
     }
 }
 
-void R6::Features::CaveiraESP(BYTE value)
+uintptr_t R6::Functions::EntityCount()
 {
-    for (int i = 0; i < 11; i++)
+    uintptr_t entity_count = 0x0;
+
+    entity_count = memory->Read<uint64_t>(hProcess, r6->functions->GameManager() + 0xE8);
+    
+    entity_count ^= 0x53;
+    entity_count += 0xEEBD43B91E3D5D54;
+    entity_count ^= 0x1FEC13843E78A654;
+
+    int countNumber = (int)(entity_count ^ 0x18C0000000);
+
+    return countNumber;
+}
+
+void R6::Features::CaveiraESP(bool active)
+{
+
+    int playerCount = r6->functions->EntityCount();
+
+    for (int player = 0; player < playerCount; player++)
     {
-        auto entityObject = memory->Read<uint64_t>(hProcess, r6->functions->EntityList() + (i * Config::Offsets::EntityList::pObject)); if (!entityObject) return;
-        entityObject = memory->Read<uint64_t>(hProcess, entityObject + Config::Offsets::EntityList::pPawn); if (!entityObject) return;
+        auto entity_object = memory->Read<uint64_t>(hProcess, r6->functions->EntityList() + (player * 0x8));
+        entity_object = r6->functions->EntityInfo(entity_object);
 
-        auto entityInfo = memory->Read<uint64_t>(hProcess, entityObject + Config::Offsets::EntityList::Info::pChain_1); if (!entityInfo) return;
-        entityInfo = memory->Read<uint64_t>(hProcess, entityInfo + Config::Offsets::EntityList::Info::pChain_2); if (!entityInfo) return;
+        auto entity_info = memory->Read<uint64_t>(hProcess, entity_object + 0x18);
+        entity_info = memory->Read<uint64_t>(hProcess, entity_info + 0xD8);
 
-        for (uint32_t current = Config::Offsets::EntityList::Entity::pChain_1; current < Config::Offsets::EntityList::Entity::pChain_2; current += 4)
+        for (uint32_t current = 0x80; current < 0xF0; current += 4)
         {
-            auto marker = memory->Read<uint64_t>(hProcess, entityInfo + current); if (!marker != 0) return;
-
-            if (memory->Read<uintptr_t>(hProcess, marker) != (base + Config::Offsets::pVTable))
+            auto markerIcon = memory->Read<uint64_t>(hProcess, entity_info + current); 
+            
+            if (markerIcon == 0) 
                 continue;
 
-            if (r6->functions->GameState())
-            {
-                memory->Write<byte>(hProcess, marker + Config::Offsets::EntityList::Marker::pSpotted, value);
-            }
+            auto checkForInvalid = memory->Read<uint64_t>(hProcess, markerIcon); 
+            if (checkForInvalid != (base + Config::Offsets::pVTable))
+             continue;
+
+            bool game_state = r6->functions->GameState();
+
+            if(game_state && active)
+                memory->Write<uint8_t>(hProcess, markerIcon + 0x220, 0x85);
+            else
+                memory->Write<uint8_t>(hProcess, markerIcon + 0x220, 0x84);
         }
     }
+
     return;
+    
 }
 
 int main()
@@ -181,13 +222,13 @@ int main()
         if (GetAsyncKeyState(hotkeyEnable) & 0x1)
         {
             std::cout << "[SUCCESS] Caveira ESP got enabled.\n";
-            r6->features->CaveiraESP(1);
+            r6->features->CaveiraESP(true);
         }
 
         if (GetAsyncKeyState(hotkeyDisable) & 0x1)
         {
             std::cout << "[SUCCESS] Caveira ESP got disabled.\n";
-            r6->features->CaveiraESP(0);
+            r6->features->CaveiraESP(false);
         }
 
     }
